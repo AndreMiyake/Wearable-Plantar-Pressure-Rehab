@@ -28,25 +28,33 @@ interface Pressao { [key: string]: number; }
 const SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"];
 type ViewMode = 'all' | 'foot' | 'graphs';
 
-// ⚠️ ATENÇÃO AQUI: VERIFIQUE ESSES GRUPOS!
-// Chutei com base nas coordenadas
+// Definição das Regiões
 const HEEL_SENSORS = ['fsr5', 'fsr6'];
 const MIDFOOT_SENSORS = ['fsr2', 'fsr3', 'fsr4'];
 const TOE_SENSORS = ['fsr0', 'fsr1'];
 
-// ⚠️ AJUSTE AQUI: Limiar de pressão (em kPa) para detectar as fases.
-const GAIT_PHASE_THRESHOLD_KPA = 200.0; // Pode ser mais baixo que o limiar de stance
+// === NOVAS CONSTANTES PARA OS GRÁFICOS DE REGIÃO ===
+type RegionKey = 'HEEL' | 'MIDFOOT' | 'TOE';
+const REGION_KEYS: RegionKey[] = ['HEEL', 'MIDFOOT', 'TOE'];
+const REGIONS: Record<RegionKey, string[]> = {
+  HEEL: HEEL_SENSORS,
+  MIDFOOT: MIDFOOT_SENSORS,
+  TOE: TOE_SENSORS,
+};
+const REGION_LABELS: Record<RegionKey, string> = {
+  HEEL: 'Pressão Média (Calcanhar)',
+  MIDFOOT: 'Pressão Média (Meio-pé)',
+  TOE: 'Pressão Média (Ponta do Pé)',
+};
 
-// 🧠 Nossas novas fases da passada
+const GAIT_PHASE_THRESHOLD_KPA = 30.0; 
 type GaitPhase = 'SWING' | 'HEEL_STRIKE' | 'MIDSTANCE' | 'HEEL_OFF';
-
 const GAIT_PHASE_LABELS: { [key in GaitPhase]: string } = {
   SWING: 'Balanço (No Ar)',
   HEEL_STRIKE: 'Apoio (Calcanhar)',
   MIDSTANCE: 'Apoio (Pé Chapado)',
   HEEL_OFF: 'Despregue (Ponta do Pé)',
 };
-
 
 // === Paleta de cores ===
 const cores = [
@@ -126,17 +134,16 @@ export default function App() {
   const [maxInfo, setMaxInfo] = useState<{ sensor: string; valorKpa: number } | null>(null);
   const ema = useRef<number | null>(null);
   const alpha = 0.3;
+  // State dos Gráficos (agora por REGIÃO)
   const [graphsData, setGraphsData] = useState<{ [key: string]: number[] }>({});
   const [view, setView] = useState<ViewMode>('all');
-
-  // States para o TEMPO DE PASSADA
-  const [gaitPhase, setGaitPhase] = useState<GaitPhase>('SWING'); // Começa 'no ar'
+  const [gaitPhase, setGaitPhase] = useState<GaitPhase>('SWING');
   const [stepStartTime, setStepStartTime] = useState<number | null>(null);
-  const [lastStepDuration, setLastStepDuration] = useState<number | null>(null); // Em segundos
+  const [lastStepDuration, setLastStepDuration] = useState<number | null>(null);
 
   // --- EFEITOS (HOOKS) ---
 
-  // EFEITO 1: Buscar dados (sem mudanças)
+  // EFEITO 1: Buscar dados e ATUALIZAR GRÁFICOS POR REGIÃO
   useEffect(() => {
     const id = setInterval(async () => {
       try {
@@ -145,18 +152,29 @@ export default function App() {
         
         if (data.pressao) {
           const newData: Pressao = data.pressao;
-          setPressao(newData);
+          setPressao(newData); // Atualiza o state 'pressao' (para o Pé e Gauge)
 
+          // *** MUDANÇA AQUI: Atualiza o state 'graphsData' por REGIÃO ***
           setGraphsData((prevGraphsData) => {
             const updatedGraphs = { ...prevGraphsData };
-            SENSOR_KEYS.forEach((key) => {
-              if (newData[key] !== undefined) { 
-                const newHistory = prevGraphsData[key] ? [...prevGraphsData[key]] : [];
-                newHistory.push(voltsToKpa(newData[key]));
-                if (newHistory.length > 30) newHistory.shift();
-                updatedGraphs[key] = newHistory;
-              }
+
+            // Itera sobre as 3 regiões (HEEL, MIDFOOT, TOE)
+            REGION_KEYS.forEach((regionKey) => {
+              const sensorsInRegion = REGIONS[regionKey];
+              
+              // 1. Pega os valores em kPa de todos os sensores da região
+              const kpaValues = sensorsInRegion.map(k => (newData[k] ? voltsToKpa(newData[k]) : 0));
+              
+              // 2. Calcula a MÉDIA de pressão da região
+              const averageKpa = kpaValues.reduce((sum, v) => sum + v, 0) / kpaValues.length;
+
+              // 3. Atualiza o histórico dessa REGIÃO
+              const newHistory = prevGraphsData[regionKey] ? [...prevGraphsData[regionKey]] : [];
+              newHistory.push(averageKpa);
+              if (newHistory.length > 30) newHistory.shift();
+              updatedGraphs[regionKey] = newHistory;
             });
+
             return updatedGraphs;
           });
         }
@@ -167,7 +185,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // EFEITO 2: Calcular Métricas + LÓGICA DAS FASES DA PASSADA (FSM)
+  // EFEITO 2: Calcular Métricas + Fases da Passada (sem mudanças)
   useEffect(() => {
     if (!pressao) return;
 
@@ -189,8 +207,6 @@ export default function App() {
 
     
     // --- LÓGICA DAS FASES DA PASSADA (FSM) ---
-
-    // Helper: checa se *qualquer* sensor em um grupo está ativo
     const isGroupActive = (keys: string[]): boolean => {
       return keys.some(k => (pressao[k] ? voltsToKpa(pressao[k]) : 0) > GAIT_PHASE_THRESHOLD_KPA);
     };
@@ -203,36 +219,29 @@ export default function App() {
     switch (gaitPhase) {
       
       case 'SWING':
-        // Transição: Pé no ar -> Tocou com calcanhar
         if (heelActive) {
           setGaitPhase('HEEL_STRIKE');
-          // Começa a contar o tempo de apoio total
           setStepStartTime(Date.now());
           setLastStepDuration(null); 
         }
         break;
 
       case 'HEEL_STRIKE':
-        // Transição: Calcanhar -> Pé chapado
         if (midfootActive || toeActive) {
           setGaitPhase('MIDSTANCE');
         }
-        // Transição de volta (pisada falsa, só tocou e saiu)
         else if (!heelActive) {
           setGaitPhase('SWING');
-          setStepStartTime(null); // Cancela o timer
+          setStepStartTime(null); 
         }
         break;
 
       case 'MIDSTANCE':
-        // Transição: Pé chapado -> Calcanhar saiu
         if (!heelActive && toeActive) {
           setGaitPhase('HEEL_OFF');
         }
-        // Transição de volta (saiu do chão direto)
         else if (!heelActive && !midfootActive && !toeActive) {
           setGaitPhase('SWING');
-          // Para o timer e registra a duração
           if (stepStartTime) {
             const durationMs = Date.now() - stepStartTime;
             setLastStepDuration(durationMs / 1000);
@@ -242,10 +251,8 @@ export default function App() {
         break;
 
       case 'HEEL_OFF':
-        // Transição: Ponta do pé -> Saiu do chão (fim da passada)
         if (!toeActive) {
           setGaitPhase('SWING');
-          // Para o timer e registra a duração
           if (stepStartTime) {
             const durationMs = Date.now() - stepStartTime;
             setLastStepDuration(durationMs / 1000);
@@ -255,11 +262,11 @@ export default function App() {
         break;
     }
 
-  }, [pressao, gaitPhase, stepStartTime]); // Adiciona 'gaitPhase'
+  }, [pressao, gaitPhase, stepStartTime]);
 
   // --- PREPARAÇÃO DE DADOS PARA RENDER ---
 
-  // Dados para o PÉ (Heatmap)
+  // Dados para o PÉ (Heatmap) (sem mudanças)
   const leftVals = SENSOR_KEYS.map(k => {
     const v = pressao?.[k] ?? 0;
     return Math.min(1, Math.max(0, v / 5));
@@ -273,11 +280,10 @@ export default function App() {
     { top: 225, left: 240 },   // FSR3
     { top: 285, left: 200 },   // FSR4
     { top: 350, left: 180 },   // FSR5
-    { top: 350, left: 250 },   // FSR6 (Ajuste aqui se precisar)
+    { top: 350, left: 250 },   // FSR6
   ];
 
-  // ... (código dos Gráficos, TabButton, MetricCard - sem mudanças) ...
-  // Dados para os GRÁFICOS DE LINHA
+  // --- MUDANÇA AQUI: Dados para os GRÁFICOS DE REGIÃO ---
   const graphOptions = {
     responsive: true,
     maintainAspectRatio: false,
@@ -286,17 +292,18 @@ export default function App() {
       tooltip: { mode: "index" as const, intersect: false },
     },
     scales: {
-      y: { beginAtZero: true, title: { display: true, text: 'Pressão (kPa)' }},
+      y: { beginAtZero: true, title: { display: true, text: 'Pressão Média (kPa)' }},
       x: { title: { display: true, text: 'Leitura (tempo)' }}
     }
   };
 
-  const graphData = (sensorKey: string) => ({
-    labels: Array.from({ length: graphsData[sensorKey]?.length || 0 }, (_, i) => i + 1),
+  // 'regionKey' agora será 'HEEL', 'MIDFOOT' ou 'TOE'
+  const graphData = (regionKey: RegionKey) => ({
+    labels: Array.from({ length: graphsData[regionKey]?.length || 0 }, (_, i) => i + 1),
     datasets: [
       {
-        label: sensorKey.toUpperCase(),
-        data: graphsData[sensorKey] || [],
+        label: REGION_LABELS[regionKey], // Usa o label bonito (ex: "Pressão Média (Calcanhar)")
+        data: graphsData[regionKey] || [],
         borderColor: "#ef4444",
         backgroundColor: "rgba(239, 68, 68, 0.3)",
         fill: true,
@@ -305,7 +312,7 @@ export default function App() {
     ],
   });
 
-  // --- COMPONENTE BOTÃO DAS ABAS ---
+  // ... (Componentes TabButton e MetricCard sem mudanças) ...
   const TabButton = ({ label, mode }: { label: string, mode: ViewMode }) => {
     const isActive = view === mode;
     return (
@@ -328,7 +335,6 @@ export default function App() {
     )
   }
   
-  // Card de métrica genérico
   const MetricCard = ({ title, children }: { title: string, children: React.ReactNode }) => (
     <div style={{
       background: "#fff", borderRadius: 16, padding: 16,
@@ -429,7 +435,7 @@ export default function App() {
               <div style={{ color: "#a855f7", fontWeight: 700 }}>PÉ DIREITO</div>
             </div>
 
-            {/* Coluna de Métricas (Gauge + Cards) */}
+            {/* Coluna de Métricas (Gauge + Cards) (sem mudanças) */}
             <div style={{ display: "grid", gap: 16, paddingTop: 20 }}>
               <Gauge
                 value={(ema.current ?? 0)}
@@ -448,7 +454,6 @@ export default function App() {
                 </div>
               </MetricCard>
 
-              {/* === CARD DE PASSADA ATUALIZADO === */}
               <MetricCard title="Métricas da Passada">
                 <div style={{ fontSize: 14, color: "#374151" }}>
                   <strong>Tempo de apoio (última):</strong>{" "}
@@ -471,12 +476,12 @@ export default function App() {
           </>
         )}
 
-        {/* === Bloco 2: Gráficos de Linha === */}
-        {(view === 'all' || view === 'graphs') && SENSOR_KEYS.map((sensorKey) => (
+        {/* === MUDANÇA AQUI: Bloco 2: Gráficos de Linha (agora 3) === */}
+        {(view === 'all' || view === 'graphs') && REGION_KEYS.map((regionKey) => (
           <div 
-            key={sensorKey} 
+            key={regionKey} 
             style={{ 
-              width: 400, 
+              width: 500, // Aumentei a largura
               height: 300, 
               background: '#fff', 
               padding: 20, 
@@ -485,7 +490,8 @@ export default function App() {
               marginTop: 20
             }}
           >
-            <Line data={graphData(sensorKey)} options={graphOptions} />
+            {/* O `graphData` agora recebe 'HEEL', 'MIDFOOT' ou 'TOE' */}
+            <Line data={graphData(regionKey)} options={graphOptions} />
           </div>
         ))}
 
