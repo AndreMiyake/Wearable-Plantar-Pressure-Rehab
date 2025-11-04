@@ -33,7 +33,7 @@ const HEEL_SENSORS = ['fsr5', 'fsr6'];
 const MIDFOOT_SENSORS = ['fsr2', 'fsr3', 'fsr4'];
 const TOE_SENSORS = ['fsr0', 'fsr1'];
 
-// === NOVAS CONSTANTES PARA OS GRÁFICOS DE REGIÃO ===
+// === CONSTANTES PARA OS GRÁFICOS DE REGIÃO ===
 type RegionKey = 'HEEL' | 'MIDFOOT' | 'TOE';
 const REGION_KEYS: RegionKey[] = ['HEEL', 'MIDFOOT', 'TOE'];
 const REGIONS: Record<RegionKey, string[]> = {
@@ -46,7 +46,30 @@ const REGION_LABELS: Record<RegionKey, string> = {
   MIDFOOT: 'Pressão Média (Meio-pé)',
   TOE: 'Pressão Média (Ponta do Pé)',
 };
+const REGION_COLORS: Record<RegionKey, string> = {
+  HEEL: '#3b82f6',    // Azul
+  MIDFOOT: '#16a34a', // Verde
+  TOE: '#ef4444',     // Vermelho
+};
 
+// === NOVO: CONSTANTES DO CoP (Centro de Pressão) ===
+// Mapeia o ID do sensor para sua coordenada (x, y) na imagem
+const SENSOR_COORDS: { [key: string]: { x: number, y: number } } = {
+  fsr0: { x: 160, y: 130 },
+  fsr1: { x: 230, y: 140 },
+  fsr2: { x: 175, y: 210 },
+  fsr3: { x: 240, y: 225 },
+  fsr4: { x: 200, y: 285 },
+  fsr5: { x: 180, y: 350 },
+  fsr6: { x: 250, y: 350 },
+};
+// Limite mínimo de pressão (kPa) para considerar um sensor no cálculo do CoP
+const COP_PRESSURE_THRESHOLD = 5.0; 
+// Tamanho do ponto do CoP em pixels
+const COP_SIZE = 20;
+
+
+// === CONSTANTES DA PASSADA ===
 const GAIT_PHASE_THRESHOLD_KPA = 30.0; 
 type GaitPhase = 'SWING' | 'HEEL_STRIKE' | 'MIDSTANCE' | 'HEEL_OFF';
 const GAIT_PHASE_LABELS: { [key in GaitPhase]: string } = {
@@ -134,12 +157,14 @@ export default function App() {
   const [maxInfo, setMaxInfo] = useState<{ sensor: string; valorKpa: number } | null>(null);
   const ema = useRef<number | null>(null);
   const alpha = 0.3;
-  // State dos Gráficos (agora por REGIÃO)
   const [graphsData, setGraphsData] = useState<{ [key: string]: number[] }>({});
   const [view, setView] = useState<ViewMode>('all');
   const [gaitPhase, setGaitPhase] = useState<GaitPhase>('SWING');
   const [stepStartTime, setStepStartTime] = useState<number | null>(null);
   const [lastStepDuration, setLastStepDuration] = useState<number | null>(null);
+  // === NOVO: State para o CoP ===
+  const [cop, setCop] = useState<{ x: number, y: number } | null>(null);
+
 
   // --- EFEITOS (HOOKS) ---
 
@@ -152,23 +177,17 @@ export default function App() {
         
         if (data.pressao) {
           const newData: Pressao = data.pressao;
-          setPressao(newData); // Atualiza o state 'pressao' (para o Pé e Gauge)
+          setPressao(newData); 
 
-          // *** MUDANÇA AQUI: Atualiza o state 'graphsData' por REGIÃO ***
+          // Atualiza o state 'graphsData' por REGIÃO
           setGraphsData((prevGraphsData) => {
             const updatedGraphs = { ...prevGraphsData };
 
-            // Itera sobre as 3 regiões (HEEL, MIDFOOT, TOE)
             REGION_KEYS.forEach((regionKey) => {
               const sensorsInRegion = REGIONS[regionKey];
-              
-              // 1. Pega os valores em kPa de todos os sensores da região
               const kpaValues = sensorsInRegion.map(k => (newData[k] ? voltsToKpa(newData[k]) : 0));
-              
-              // 2. Calcula a MÉDIA de pressão da região
               const averageKpa = kpaValues.reduce((sum, v) => sum + v, 0) / kpaValues.length;
 
-              // 3. Atualiza o histórico dessa REGIÃO
               const newHistory = prevGraphsData[regionKey] ? [...prevGraphsData[regionKey]] : [];
               newHistory.push(averageKpa);
               if (newHistory.length > 30) newHistory.shift();
@@ -185,7 +204,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // EFEITO 2: Calcular Métricas + Fases da Passada (sem mudanças)
+  // EFEITO 2: Calcular Métricas + CoP + Fases da Passada
   useEffect(() => {
     if (!pressao) return;
 
@@ -206,9 +225,41 @@ export default function App() {
     else ema.current = alpha * maxKpa + (1 - alpha) * (ema.current as number);
 
     
+    // === MUDANÇA AQUI: Cálculo do CoP (Centro de Pressão) ===
+    let weightedSumX = 0;
+    let weightedSumY = 0;
+    let totalPressure = 0;
+    const kpaValues: { [key: string]: number } = {}; // Guarda os kPas p/ reutilizar na FSM
+
+    for (const key of SENSOR_KEYS) {
+      const kpa = pressao[key] ? voltsToKpa(pressao[key]) : 0;
+      kpaValues[key] = kpa; // Armazena
+
+      // Só considera sensores acima do threshold de ruído
+      if (kpa > COP_PRESSURE_THRESHOLD) {
+        const coords = SENSOR_COORDS[key];
+        if (coords) {
+          weightedSumX += coords.x * kpa;
+          weightedSumY += coords.y * kpa;
+          totalPressure += kpa;
+        }
+      }
+    }
+
+    if (totalPressure > 0) {
+      setCop({ 
+        x: weightedSumX / totalPressure, 
+        y: weightedSumY / totalPressure 
+      });
+    } else {
+      setCop(null); // Sem pressão, sem CoP
+    }
+
+    
     // --- LÓGICA DAS FASES DA PASSADA (FSM) ---
+    // Reutiliza os valores de kPA já calculados
     const isGroupActive = (keys: string[]): boolean => {
-      return keys.some(k => (pressao[k] ? voltsToKpa(pressao[k]) : 0) > GAIT_PHASE_THRESHOLD_KPA);
+      return keys.some(k => (kpaValues[k] || 0) > GAIT_PHASE_THRESHOLD_KPA);
     };
 
     const heelActive = isGroupActive(HEEL_SENSORS);
@@ -217,7 +268,6 @@ export default function App() {
     
     // Máquina de Estados
     switch (gaitPhase) {
-      
       case 'SWING':
         if (heelActive) {
           setGaitPhase('HEEL_STRIKE');
@@ -225,21 +275,15 @@ export default function App() {
           setLastStepDuration(null); 
         }
         break;
-
       case 'HEEL_STRIKE':
-        if (midfootActive || toeActive) {
-          setGaitPhase('MIDSTANCE');
-        }
+        if (midfootActive || toeActive) setGaitPhase('MIDSTANCE');
         else if (!heelActive) {
           setGaitPhase('SWING');
           setStepStartTime(null); 
         }
         break;
-
       case 'MIDSTANCE':
-        if (!heelActive && toeActive) {
-          setGaitPhase('HEEL_OFF');
-        }
+        if (!heelActive && toeActive) setGaitPhase('HEEL_OFF');
         else if (!heelActive && !midfootActive && !toeActive) {
           setGaitPhase('SWING');
           if (stepStartTime) {
@@ -249,7 +293,6 @@ export default function App() {
           setStepStartTime(null);
         }
         break;
-
       case 'HEEL_OFF':
         if (!toeActive) {
           setGaitPhase('SWING');
@@ -266,13 +309,14 @@ export default function App() {
 
   // --- PREPARAÇÃO DE DADOS PARA RENDER ---
 
-  // Dados para o PÉ (Heatmap) (sem mudanças)
+  // Dados para o PÉ (Heatmap Sensores)
   const leftVals = SENSOR_KEYS.map(k => {
     const v = pressao?.[k] ?? 0;
     return Math.min(1, Math.max(0, v / 5));
   });
   const kpaVals = SENSOR_KEYS.map(k => voltsToKpa(pressao?.[k] ?? 0));
   
+  // Coordenadas dos Sensores (para renderização)
   const footCoords = [
     { top: 130, left: 160 },   // FSR0
     { top: 140, left: 230 },   // FSR1
@@ -283,7 +327,7 @@ export default function App() {
     { top: 350, left: 250 },   // FSR6
   ];
 
-  // --- MUDANÇA AQUI: Dados para os GRÁFICOS DE REGIÃO ---
+  // Opções dos Gráficos (comum para todos)
   const graphOptions = {
     responsive: true,
     maintainAspectRatio: false,
@@ -297,23 +341,73 @@ export default function App() {
     }
   };
 
-  // 'regionKey' agora será 'HEEL', 'MIDFOOT' ou 'TOE'
+  // Dados para os GRÁFICOS DE REGIÃO (Individuais)
   const graphData = (regionKey: RegionKey) => ({
     labels: Array.from({ length: graphsData[regionKey]?.length || 0 }, (_, i) => i + 1),
     datasets: [
       {
-        label: REGION_LABELS[regionKey], // Usa o label bonito (ex: "Pressão Média (Calcanhar)")
+        label: REGION_LABELS[regionKey],
         data: graphsData[regionKey] || [],
-        borderColor: "#ef4444",
-        backgroundColor: "rgba(239, 68, 68, 0.3)",
+        borderColor: REGION_COLORS[regionKey] || "#ef4444",
+        backgroundColor: (REGION_COLORS[regionKey] || "#ef4444") + '4D',
         fill: true,
         tension: 0.1
       },
     ],
   });
 
-  // ... (Componentes TabButton e MetricCard sem mudanças) ...
+  // Dados para o Gráfico GERAL (Deslocamento)
+  const graphDataGeral = () => {
+    const sampleData = graphsData['HEEL'] || [];
+    const labels = Array.from({ length: sampleData.length }, (_, i) => i + 1);
+
+    return {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Calcanhar',
+          data: graphsData['HEEL'] || [],
+          borderColor: REGION_COLORS['HEEL'],
+          backgroundColor: REGION_COLORS['HEEL'] + '4D',
+          fill: false,
+          tension: 0.1
+        },
+        {
+          label: 'Meio-pé',
+          data: graphsData['MIDFOOT'] || [],
+          borderColor: REGION_COLORS['MIDFOOT'],
+          backgroundColor: REGION_COLORS['MIDFOOT'] + '4D',
+          fill: false,
+          tension: 0.1
+        },
+        {
+          label: 'Ponta do Pé',
+          data: graphsData['TOE'] || [],
+          borderColor: REGION_COLORS['TOE'],
+          backgroundColor: REGION_COLORS['TOE'] + '4D',
+          fill: false,
+          tension: 0.1
+        },
+      ],
+    };
+  };
+
+  // Opções para o Gráfico GERAL (com título)
+  const graphOptionsGeral = {
+    ...graphOptions,
+    plugins: {
+      ...graphOptions.plugins,
+      title: {
+        display: true,
+        text: 'Deslocamento da Pressão por Região',
+        font: { size: 16 }
+      },
+    },
+  };
+
+  // --- Componentes Internos (Tabs e Cards) ---
   const TabButton = ({ label, mode }: { label: string, mode: ViewMode }) => {
+    // ... (código do TabButton sem mudanças) ...
     const isActive = view === mode;
     return (
       <button
@@ -335,7 +429,9 @@ export default function App() {
     )
   }
   
-  const MetricCard = ({ title, children }: { title: string, children: React.ReactNode }) => (
+  const MetricCard = ({ title, children }: { title: string, children: React.ReactNode }) => {
+    // ... (código do MetricCard sem mudanças) ...
+    return (
     <div style={{
       background: "#fff", borderRadius: 16, padding: 16,
       boxShadow: "0 8px 24px rgba(0,0,0,0.06)", minWidth: 260
@@ -343,7 +439,7 @@ export default function App() {
       <div style={{ fontWeight: 700, marginBottom: 8, color: "#1f2937" }}>{title}</div>
       {children}
     </div>
-  );
+  )};
 
   // --- RENDERIZAÇÃO ---
   return (
@@ -382,7 +478,6 @@ export default function App() {
         {(view === 'all' || view === 'foot') && (
           <>
             <div style={{ textAlign: "center", position: "relative" }}>
-              {/* ... (código do pé, sem mudanças) ... */}
               <div
                 style={{
                   position: "relative",
@@ -396,6 +491,28 @@ export default function App() {
                   transform: "translateY(20px)",
                 }}
               >
+                {/* === NOVO: Renderização do CoP === */}
+                {cop && (
+                  <div
+                    title={`CoP: (${cop.x.toFixed(1)}, ${cop.y.toFixed(1)})`}
+                    style={{
+                      position: 'absolute',
+                      // Centraliza o ponto no (x, y) calculado
+                      top: cop.y - (COP_SIZE / 2),
+                      left: cop.x - (COP_SIZE / 2),
+                      width: COP_SIZE,
+                      height: COP_SIZE,
+                      borderRadius: '50%',
+                      background: 'rgba(29, 78, 216, 0.9)', // Azul forte
+                      border: '2px solid white',
+                      boxShadow: '0 0 10px rgba(0,0,0,0.5)',
+                      zIndex: 10, // Garante que fique por cima dos sensores
+                      transition: 'top 0.05s linear, left 0.05s linear' // Suaviza o movimento
+                    }}
+                  />
+                )}
+
+                {/* Renderização dos Sensores */}
                 {SENSOR_KEYS.map((key, i) => {
                   if (!footCoords[i]) return null; 
                   return (
@@ -417,6 +534,7 @@ export default function App() {
                         fontSize: 12,
                         color: "#111",
                         opacity: 0.9,
+                        zIndex: 1 // Fica abaixo do CoP
                       }}
                     >
                       <div style={{
@@ -476,12 +594,32 @@ export default function App() {
           </>
         )}
 
-        {/* === MUDANÇA AQUI: Bloco 2: Gráficos de Linha (agora 3) === */}
+        {/* === Bloco 2: Gráficos de Linha === */}
+
+        {/* Gráfico Geral */}
+        {(view === 'all' || view === 'graphs') && (
+          <div 
+            style={{ 
+              width: 500,
+              height: 300, 
+              background: '#fff', 
+              padding: 20, 
+              borderRadius: 12, 
+              boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
+              marginTop: 20,
+              order: -1
+            }}
+          >
+            <Line data={graphDataGeral()} options={graphOptionsGeral} />
+          </div>
+        )}
+
+        {/* Gráficos Individuais */}
         {(view === 'all' || view === 'graphs') && REGION_KEYS.map((regionKey) => (
           <div 
             key={regionKey} 
             style={{ 
-              width: 500, // Aumentei a largura
+              width: 500,
               height: 300, 
               background: '#fff', 
               padding: 20, 
@@ -490,7 +628,6 @@ export default function App() {
               marginTop: 20
             }}
           >
-            {/* O `graphData` agora recebe 'HEEL', 'MIDFOOT' ou 'TOE' */}
             <Line data={graphData(regionKey)} options={graphOptions} />
           </div>
         ))}
