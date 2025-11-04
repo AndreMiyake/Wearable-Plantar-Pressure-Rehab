@@ -1,5 +1,7 @@
 import serial, json, threading, time, os
 
+#$env:ARDUINO_PORT = "COM5" colocar no terminal pra selecionar a porta
+
 PORTA = os.getenv("ARDUINO_PORT", "COM3")
 BAUDRATE = 115200
 
