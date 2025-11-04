@@ -28,9 +28,25 @@ interface Pressao { [key: string]: number; }
 const SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"];
 type ViewMode = 'all' | 'foot' | 'graphs';
 
-// ⚠️ AJUSTE AQUI: Limiar de pressão (em kPa) para detectar o pé no chão.
-// Comece com 50 e vá ajustando.
-const STANCE_THRESHOLD_KPA = 50.0;
+// ⚠️ ATENÇÃO AQUI: VERIFIQUE ESSES GRUPOS!
+// Chutei com base nas coordenadas
+const HEEL_SENSORS = ['fsr5', 'fsr6'];
+const MIDFOOT_SENSORS = ['fsr2', 'fsr3', 'fsr4'];
+const TOE_SENSORS = ['fsr0', 'fsr1'];
+
+// ⚠️ AJUSTE AQUI: Limiar de pressão (em kPa) para detectar as fases.
+const GAIT_PHASE_THRESHOLD_KPA = 200.0; // Pode ser mais baixo que o limiar de stance
+
+// 🧠 Nossas novas fases da passada
+type GaitPhase = 'SWING' | 'HEEL_STRIKE' | 'MIDSTANCE' | 'HEEL_OFF';
+
+const GAIT_PHASE_LABELS: { [key in GaitPhase]: string } = {
+  SWING: 'Balanço (No Ar)',
+  HEEL_STRIKE: 'Apoio (Calcanhar)',
+  MIDSTANCE: 'Apoio (Pé Chapado)',
+  HEEL_OFF: 'Despregue (Ponta do Pé)',
+};
+
 
 // === Paleta de cores ===
 const cores = [
@@ -56,6 +72,7 @@ function Gauge({
   label = "Pressão Máxima",
   sublabel,
 }: { value: number; max?: number; label?: string; sublabel?: string }) {
+  // ... (código do Gauge sem mudanças) ...
   const size = 220, stroke = 18;
   const r = (size - stroke) / 2;
   const cx = size / 2, cy = size / 2;
@@ -113,13 +130,13 @@ export default function App() {
   const [view, setView] = useState<ViewMode>('all');
 
   // States para o TEMPO DE PASSADA
-  const [gaitState, setGaitState] = useState<'SWING' | 'STANCE'>('SWING'); // Começa 'no ar'
+  const [gaitPhase, setGaitPhase] = useState<GaitPhase>('SWING'); // Começa 'no ar'
   const [stepStartTime, setStepStartTime] = useState<number | null>(null);
   const [lastStepDuration, setLastStepDuration] = useState<number | null>(null); // Em segundos
 
   // --- EFEITOS (HOOKS) ---
 
-  // EFEITO 1: Buscar dados
+  // EFEITO 1: Buscar dados (sem mudanças)
   useEffect(() => {
     const id = setInterval(async () => {
       try {
@@ -128,10 +145,8 @@ export default function App() {
         
         if (data.pressao) {
           const newData: Pressao = data.pressao;
-          // 1. Atualiza o state 'pressao' (para o Pé e Gauge)
           setPressao(newData);
 
-          // 2. Atualiza o state 'graphsData' (para os Gráficos de Linha)
           setGraphsData((prevGraphsData) => {
             const updatedGraphs = { ...prevGraphsData };
             SENSOR_KEYS.forEach((key) => {
@@ -152,49 +167,95 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // EFEITO 2: Calcular Métricas + LÓGICA DO TEMPO DE PASSADA
+  // EFEITO 2: Calcular Métricas + LÓGICA DAS FASES DA PASSADA (FSM)
   useEffect(() => {
     if (!pressao) return;
 
+    // --- Cálculo da Pressão Máxima (para o Gauge) ---
     const entriesLeft = SENSOR_KEYS
       .filter(k => k in pressao)
       .map(k => [k, pressao[k]] as [string, number]);
 
     if (entriesLeft.length === 0) return;
 
-    // --- Cálculo da Pressão Máxima ---
     const [maxSensor, maxVolts] = entriesLeft.reduce(
       (p, c) => (c[1] > p[1] ? c : p),
       entriesLeft[0]
     );
     const maxKpa = voltsToKpa(maxVolts);
     setMaxInfo({ sensor: maxSensor, valorKpa: maxKpa });
-
-    // --- Cálculo do Gauge (EMA) ---
     if (ema.current == null) ema.current = maxKpa;
     else ema.current = alpha * maxKpa + (1 - alpha) * (ema.current as number);
 
-    // --- LÓGICA DO TEMPO DE PASSADA (STANCE TIME) ---
-    const isTouching = maxKpa > STANCE_THRESHOLD_KPA;
+    
+    // --- LÓGICA DAS FASES DA PASSADA (FSM) ---
 
-    // Caso 1: Pé acabou de tocar o chão (SWING -> STANCE)
-    if (isTouching && gaitState === 'SWING') {
-      setGaitState('STANCE');
-      setStepStartTime(Date.now());
-      setLastStepDuration(null); // Limpa a duração antiga
+    // Helper: checa se *qualquer* sensor em um grupo está ativo
+    const isGroupActive = (keys: string[]): boolean => {
+      return keys.some(k => (pressao[k] ? voltsToKpa(pressao[k]) : 0) > GAIT_PHASE_THRESHOLD_KPA);
+    };
+
+    const heelActive = isGroupActive(HEEL_SENSORS);
+    const midfootActive = isGroupActive(MIDFOOT_SENSORS);
+    const toeActive = isGroupActive(TOE_SENSORS);
+    
+    // Máquina de Estados
+    switch (gaitPhase) {
+      
+      case 'SWING':
+        // Transição: Pé no ar -> Tocou com calcanhar
+        if (heelActive) {
+          setGaitPhase('HEEL_STRIKE');
+          // Começa a contar o tempo de apoio total
+          setStepStartTime(Date.now());
+          setLastStepDuration(null); 
+        }
+        break;
+
+      case 'HEEL_STRIKE':
+        // Transição: Calcanhar -> Pé chapado
+        if (midfootActive || toeActive) {
+          setGaitPhase('MIDSTANCE');
+        }
+        // Transição de volta (pisada falsa, só tocou e saiu)
+        else if (!heelActive) {
+          setGaitPhase('SWING');
+          setStepStartTime(null); // Cancela o timer
+        }
+        break;
+
+      case 'MIDSTANCE':
+        // Transição: Pé chapado -> Calcanhar saiu
+        if (!heelActive && toeActive) {
+          setGaitPhase('HEEL_OFF');
+        }
+        // Transição de volta (saiu do chão direto)
+        else if (!heelActive && !midfootActive && !toeActive) {
+          setGaitPhase('SWING');
+          // Para o timer e registra a duração
+          if (stepStartTime) {
+            const durationMs = Date.now() - stepStartTime;
+            setLastStepDuration(durationMs / 1000);
+          }
+          setStepStartTime(null);
+        }
+        break;
+
+      case 'HEEL_OFF':
+        // Transição: Ponta do pé -> Saiu do chão (fim da passada)
+        if (!toeActive) {
+          setGaitPhase('SWING');
+          // Para o timer e registra a duração
+          if (stepStartTime) {
+            const durationMs = Date.now() - stepStartTime;
+            setLastStepDuration(durationMs / 1000);
+          }
+          setStepStartTime(null);
+        }
+        break;
     }
 
-    // Caso 2: Pé acabou de sair do chão (STANCE -> SWING)
-    if (!isTouching && gaitState === 'STANCE') {
-      setGaitState('SWING');
-      if (stepStartTime) {
-        const durationMs = Date.now() - stepStartTime;
-        setLastStepDuration(durationMs / 1000); // Salva em segundos
-      }
-      setStepStartTime(null);
-    }
-
-  }, [pressao, gaitState, stepStartTime]); // Adiciona os novos states como dependência
+  }, [pressao, gaitPhase, stepStartTime]); // Adiciona 'gaitPhase'
 
   // --- PREPARAÇÃO DE DADOS PARA RENDER ---
 
@@ -215,6 +276,7 @@ export default function App() {
     { top: 350, left: 250 },   // FSR6 (Ajuste aqui se precisar)
   ];
 
+  // ... (código dos Gráficos, TabButton, MetricCard - sem mudanças) ...
   // Dados para os GRÁFICOS DE LINHA
   const graphOptions = {
     responsive: true,
@@ -276,7 +338,6 @@ export default function App() {
       {children}
     </div>
   );
-
 
   // --- RENDERIZAÇÃO ---
   return (
@@ -387,7 +448,7 @@ export default function App() {
                 </div>
               </MetricCard>
 
-              {/* === NOVO CARD DE TEMPO DE PASSADA === */}
+              {/* === CARD DE PASSADA ATUALIZADO === */}
               <MetricCard title="Métricas da Passada">
                 <div style={{ fontSize: 14, color: "#374151" }}>
                   <strong>Tempo de apoio (última):</strong>{" "}
@@ -396,12 +457,12 @@ export default function App() {
                   </span>
                 </div>
                  <div style={{ fontSize: 14, color: "#374151", marginTop: 8 }}>
-                  <strong>Status atual:</strong>{" "}
+                  <strong>Fase atual da passada:</strong>{" "}
                   <span style={{
                       fontWeight: 700, 
-                      color: gaitState === 'STANCE' ? '#16a34a' : '#6b7280' 
+                      color: gaitPhase === 'SWING' ? '#6b7280' : '#16a34a' 
                     }}>
-                    {gaitState === 'STANCE' ? 'PÉ NO CHÃO' : 'NO AR'}
+                    {GAIT_PHASE_LABELS[gaitPhase]}
                   </span>
                 </div>
               </MetricCard>
