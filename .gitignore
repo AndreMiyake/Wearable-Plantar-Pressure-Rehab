@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+.vite/
+.parcel-cache/
+dist/
+build/
+
+# Ambiente e configs locais
+.env
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Outros arquivos temporários
+*.log
