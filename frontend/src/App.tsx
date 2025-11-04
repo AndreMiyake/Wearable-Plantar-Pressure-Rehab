@@ -1,6 +1,34 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Line } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+} from "chart.js";
+
+// Registrar os componentes do Chart.js
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend
+);
 
 interface Pressao { [key: string]: number; }
+
+// === CONSTANTES DO PROJETO ===
+// Fonte da verdade: 7 sensores (fsr0 até fsr6)
+const SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"];
+// Tipo da Visão
+type ViewMode = 'all' | 'foot' | 'graphs';
 
 // === Paleta de cores ===
 const cores = [
@@ -44,7 +72,7 @@ function Gauge({
       background: "#ffffff", boxShadow: "0 8px 30px rgba(0,0,0,0.08)",
       textAlign: "center"
     }}>
-      <div style={{ fontWeight: 700, color: "#1f2937", marginBottom: 8 }}>{label}</div>
+      <div style={{ fontWeight: 700, color: "#1f2937", marginBottom: 8, fontSize: 14 }}>{label}</div>
       <svg width={size} height={size/1.2} viewBox={`0 0 ${size} ${size/1.2}`}>
         <g transform={`translate(0, ${stroke/2})`}>
           <path
@@ -72,27 +100,63 @@ function Gauge({
   );
 }
 
+// === Componente Principal ===
 export default function App() {
+  // --- STATES ---
   const [pressao, setPressao] = useState<Pressao | null>(null);
-  const leftKeys = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5"];
   const [maxInfo, setMaxInfo] = useState<{ sensor: string; valorKpa: number } | null>(null);
   const ema = useRef<number | null>(null);
   const alpha = 0.3;
+  // State para os Gráficos de Linha (histórico)
+  const [graphsData, setGraphsData] = useState<{ [key: string]: number[] }>({});
+  // State da Visão (Abas)
+  const [view, setView] = useState<ViewMode>('all');
 
+  // --- EFEITOS (HOOKS) ---
+
+  // EFEITO 1: Buscar dados e ATUALIZAR OS DOIS STATES
   useEffect(() => {
     const id = setInterval(async () => {
       try {
         const res = await fetch("http://127.0.0.1:8000/pressao");
         const data = await res.json();
-        if (data.pressao) setPressao(data.pressao);
-      } catch {}
+        
+        if (data.pressao) {
+          const newData: Pressao = data.pressao;
+
+          // 1. Atualiza o state 'pressao' (para o Pé e Gauge)
+          setPressao(newData);
+
+          // 2. Atualiza o state 'graphsData' (para os Gráficos de Linha)
+          // AGORA FILTRANDO SÓ PELOS 7 SENSORES
+          setGraphsData((prevGraphsData) => {
+            const updatedGraphs = { ...prevGraphsData };
+
+            SENSOR_KEYS.forEach((key) => {
+              // Só atualiza se o sensor existir nos dados da API
+              if (newData[key] !== undefined) { 
+                const newHistory = prevGraphsData[key] ? [...prevGraphsData[key]] : [];
+                newHistory.push(voltsToKpa(newData[key]));
+                if (newHistory.length > 30) newHistory.shift();
+                updatedGraphs[key] = newHistory;
+              }
+            });
+
+            return updatedGraphs;
+          });
+        }
+      } catch (error) {
+        console.error("Erro ao buscar dados:", error)
+      }
     }, 200);
     return () => clearInterval(id);
   }, []);
 
+  // EFEITO 2: Calcular Métricas (quando 'pressao' muda)
   useEffect(() => {
     if (!pressao) return;
-    const entriesLeft = leftKeys
+    // Usa SENSOR_KEYS para garantir que só estamos olhando os 7
+    const entriesLeft = SENSOR_KEYS
       .filter(k => k in pressao)
       .map(k => [k, pressao[k]] as [string, number]);
 
@@ -109,24 +173,78 @@ export default function App() {
     else ema.current = alpha * maxKpa + (1 - alpha) * (ema.current as number);
   }, [pressao]);
 
-  // valores 0–1
-  const leftVals = leftKeys.map(k => {
+  // --- PREPARAÇÃO DE DADOS PARA RENDER ---
+
+  // Dados para o PÉ (Heatmap) - Agora com 7 sensores
+  const leftVals = SENSOR_KEYS.map(k => {
     const v = pressao?.[k] ?? 0;
     return Math.min(1, Math.max(0, v / 5));
   });
-
-  const kpaVals = leftKeys.map(k => voltsToKpa(pressao?.[k] ?? 0));
-
-  // coordenadas dos sensores no pé esquerdo
-  const sensorPos = [
-    { top: 10, left: 60 },  // FSR0 – dedo maior
-    { top: 40, left: 30 },  // FSR1 – dedo lateral
-    { top: 40, left: 90 },  // FSR2 – meio antepé
-    { top: 90, left: 40 },  // FSR3 – arco
-    { top: 130, left: 70 }, // FSR4 – calcanhar interno
-    { top: 150, left: 20 }, // FSR5 – calcanhar externo
+  const kpaVals = SENSOR_KEYS.map(k => voltsToKpa(pressao?.[k] ?? 0));
+  
+  // ⚠️ ATENÇÃO AQUI: Ajuste as coordenadas do FSR6
+  const footCoords = [
+    { top: 130, left: 160 },   // FSR0 (dedo maior)
+    { top: 140, left: 230 },   // FSR1
+    { top: 210, left: 175 },   // FSR2
+    { top: 225, left: 240 },   // FSR3
+    { top: 285, left: 200 },   // FSR4
+    { top: 350, left: 180 },   // FSR5 (calcanhar)
+    { top: 350, left: 250 },   // FSR6 (CHUTEI ESSE VALOR - AJUSTE AQUI)
   ];
 
+  // Dados para os GRÁFICOS DE LINHA
+  const graphOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: "top" as const },
+      tooltip: { mode: "index" as const, intersect: false },
+    },
+    scales: {
+      y: { beginAtZero: true, title: { display: true, text: 'Pressão (kPa)' }},
+      x: { title: { display: true, text: 'Leitura (tempo)' }}
+    }
+  };
+
+  const graphData = (sensorKey: string) => ({
+    labels: Array.from({ length: graphsData[sensorKey]?.length || 0 }, (_, i) => i + 1),
+    datasets: [
+      {
+        label: sensorKey.toUpperCase(),
+        data: graphsData[sensorKey] || [],
+        borderColor: "#ef4444",
+        backgroundColor: "rgba(239, 68, 68, 0.3)",
+        fill: true,
+        tension: 0.1
+      },
+    ],
+  });
+
+  // --- COMPONENTE BOTÃO DAS ABAS ---
+  const TabButton = ({ label, mode }: { label: string, mode: ViewMode }) => {
+    const isActive = view === mode;
+    return (
+      <button
+        onClick={() => setView(mode)}
+        style={{
+          padding: '8px 16px',
+          border: 'none',
+          borderRadius: 8,
+          background: isActive ? '#a855f7' : '#fff',
+          color: isActive ? '#fff' : '#374151',
+          fontWeight: 600,
+          cursor: 'pointer',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+          transition: 'all 0.2s',
+        }}
+      >
+        {label}
+      </button>
+    )
+  }
+
+  // --- RENDERIZAÇÃO ---
   return (
     <div style={{
       minHeight: "100vh",
@@ -135,106 +253,142 @@ export default function App() {
       flexDirection: "column",
       alignItems: "center",
       fontFamily: "Inter, ui-sans-serif, system-ui",
-      padding: 30
+      padding: 30,
+      boxSizing: 'border-box'
     }}>
-      <h1 style={{ fontWeight: 700, fontSize: 22, marginBottom: 24, color: "#1f2937" }}>
+      <h1 style={{ fontWeight: 700, fontSize: 22, marginBottom: 16, color: "#1f2937" }}>
         Análise da Pressão do Pé Direito
       </h1>
 
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start", justifyContent: "center" }}>
-        
-        
-        {/* Pé esquerdo com contorno real */}
-<div style={{ textAlign: "center", position: "relative" }}>
-  <div
-    style={{
-      position: "relative",
-      width: 420,
-      height: 450,
-      backgroundImage: "url('/foot1.png')", // 👈 nome da silhueta
-      backgroundSize: "contain",
-      backgroundRepeat: "no-repeat",
-      backgroundPosition: "center",
-      marginBottom: 10,
-      transform: "translateY(20px)",
-    }}
-  >
-    {leftVals.map((v, i) => {
-      const coords = [
-        { top: 130, left: 160 },   // FSR0 (dedo maior)
-        { top: 140, left: 230 },   // FSR1
-        { top: 210, left: 175 }, // FSR2
-        { top: 225, left: 240 },  // FSR3
-        { top: 285, left: 200 }, // FSR4
-        { top: 350, left: 180 },  // FSR5 (calcanhar)
-      ];
-      return (
-        <div
-          key={i}
-          style={{
-            position: "absolute",
-            top: coords[i].top,
-            left: coords[i].left,
-            width: 55,
-            height: 55,
-            borderRadius: 8,
-            backgroundColor: getColor(v),
-            boxShadow: "0 0 8px rgba(0,0,0,0.2)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontWeight: 700,
-            fontSize: 12,
-            color: "#111",
-            opacity: 0.9,
-          }}
-        >
-          <div
-            style={{
-              position: "absolute",
-              top: 3,
-              left: 3,
-              background: "rgba(0,0,0,0.6)",
-              color: "white",
-              padding: "1px 4px",
-              borderRadius: 4,
-              fontSize: 10,
-              fontWeight: 700,
-            }}
-          >
-            FSR{i}
-          </div>
-          {kpaVals[i].toFixed(1)} kPa
-        </div>
-      );
-    })}
-  </div>
-  <div style={{ color: "#a855f7", fontWeight: 700 }}>PÉ DIREITO</div>
-</div>
+      {/* === ABAS DE SELEÇÃO === */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+        <TabButton label="Visão Geral" mode="all" />
+        <TabButton label="Mapa de Calor" mode="foot" />
+        <TabButton label="Gráficos" mode="graphs" />
+      </div>
 
+      {/* Container principal com Flex-wrap */}
+      <div style={{ 
+        display: "flex", 
+        gap: 24, 
+        flexWrap: "wrap", 
+        alignItems: "flex-start", 
+        justifyContent: "center", 
+        width: '100%' 
+      }}>
+        
+        {/* === Bloco 1: O Pé (Heatmap) + Gauge === */}
+        {/* Só mostra se a view for 'all' ou 'foot' */}
+        {(view === 'all' || view === 'foot') && (
+          <>
+            <div style={{ textAlign: "center", position: "relative" }}>
+              <div
+                style={{
+                  position: "relative",
+                  width: 420,
+                  height: 450,
+                  backgroundImage: "url('/foot1.png')",
+                  backgroundSize: "contain",
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: "center",
+                  marginBottom: 10,
+                  transform: "translateY(20px)",
+                }}
+              >
+                {/* Agora mapeia SENSOR_KEYS, garantindo 7 sensores */}
+                {SENSOR_KEYS.map((key, i) => {
+                  // Checa se as coordenadas existem (evita crash se footCoords for menor)
+                  if (!footCoords[i]) return null; 
+                  
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        position: "absolute",
+                        top: footCoords[i].top,
+                        left: footCoords[i].left,
+                        width: 55,
+                        height: 55,
+                        borderRadius: 8,
+                        backgroundColor: getColor(leftVals[i]),
+                        boxShadow: "0 0 8px rgba(0,0,0,0.2)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontWeight: 700,
+                        fontSize: 12,
+                        color: "#111",
+                        opacity: 0.9,
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 3,
+                          left: 3,
+                          background: "rgba(0,0,0,0.6)",
+                          color: "white",
+                          padding: "1px 4px",
+                          borderRadius: 4,
+                          fontSize: 10,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {key.toUpperCase()}
+                      </div>
+                      {kpaVals[i].toFixed(1)} kPa
+                    </div>
+                  )
+                })}
+              </div>
+              <div style={{ color: "#a855f7", fontWeight: 700 }}>PÉ DIREITO</div>
+            </div>
 
-        {/* gauge + métrica */}
-        <div style={{ display: "grid", gap: 16 }}>
-          <Gauge
-            value={(ema.current ?? 0)}
-            max={400}
-            label="Pressão Máxima (suavizada)"
-            sublabel={maxInfo ? maxInfo.sensor.toUpperCase() : ""}
-          />
-          <div style={{
-            background: "#fff", borderRadius: 16, padding: 16,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.06)", minWidth: 260
-          }}>
-            <div style={{ fontWeight: 700, marginBottom: 8, color: "#1f2937" }}>Métricas</div>
-            <div style={{ fontSize: 14, color: "#374151" }}>
-              <strong>Máxima instantânea:</strong>{" "}
-              {maxInfo ? `${maxInfo.valorKpa.toFixed(1)} kPa (${maxInfo.sensor.toUpperCase()})` : "—"}
-              <div style={{ fontSize: 12, color: "#6b7280" }}>
-                (sensores FSR0–FSR5)
+            {/* Gauge + Métricas */}
+            <div style={{ display: "grid", gap: 16, paddingTop: 20 }}>
+              <Gauge
+                value={(ema.current ?? 0)}
+                max={400}
+                label="Pressão Máxima (suavizada)"
+                sublabel={maxInfo ? maxInfo.sensor.toUpperCase() : ""}
+              />
+              <div style={{
+                background: "#fff", borderRadius: 16, padding: 16,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.06)", minWidth: 260
+              }}>
+                <div style={{ fontWeight: 700, marginBottom: 8, color: "#1f2937" }}>Métricas</div>
+                <div style={{ fontSize: 14, color: "#374151" }}>
+                  <strong>Máxima instantânea:</strong>{" "}
+                  {maxInfo ? `${maxInfo.valorKpa.toFixed(1)} kPa (${maxInfo.sensor.toUpperCase()})` : "—"}
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                    (sensores {SENSOR_KEYS.map(k => k.toUpperCase()).join('–')})
+                  </div>
+                </div>
               </div>
             </div>
+          </>
+        )}
+
+        {/* === Bloco 2: Gráficos de Linha === */}
+        {/* Só mostra se a view for 'all' ou 'graphs' */}
+        {/* Agora mapeia SENSOR_KEYS, garantindo só 7 gráficos */}
+        {(view === 'all' || view === 'graphs') && SENSOR_KEYS.map((sensorKey) => (
+          <div 
+            key={sensorKey} 
+            style={{ 
+              width: 400, 
+              height: 300, 
+              background: '#fff', 
+              padding: 20, 
+              borderRadius: 12, 
+              boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
+              marginTop: 20
+            }}
+          >
+            <Line data={graphData(sensorKey)} options={graphOptions} />
           </div>
-        </div>
+        ))}
+
       </div>
     </div>
   );
