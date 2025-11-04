@@ -36,6 +36,8 @@ threading.Thread(target=_serial_loop, daemon=True).start()
 
 import random, time
 
+#ta gerando dados falsos nao esquecer
+
 def read_pressure_data():
     """Simula leituras do Arduino (6 FSR por pé, total 12 sensores)."""
     time.sleep(1)  # ~20 Hz
