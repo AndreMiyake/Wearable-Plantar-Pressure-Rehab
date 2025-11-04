@@ -25,10 +25,12 @@ ChartJS.register(
 interface Pressao { [key: string]: number; }
 
 // === CONSTANTES DO PROJETO ===
-// Fonte da verdade: 7 sensores (fsr0 até fsr6)
 const SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"];
-// Tipo da Visão
 type ViewMode = 'all' | 'foot' | 'graphs';
+
+// ⚠️ AJUSTE AQUI: Limiar de pressão (em kPa) para detectar o pé no chão.
+// Comece com 50 e vá ajustando.
+const STANCE_THRESHOLD_KPA = 50.0;
 
 // === Paleta de cores ===
 const cores = [
@@ -107,14 +109,17 @@ export default function App() {
   const [maxInfo, setMaxInfo] = useState<{ sensor: string; valorKpa: number } | null>(null);
   const ema = useRef<number | null>(null);
   const alpha = 0.3;
-  // State para os Gráficos de Linha (histórico)
   const [graphsData, setGraphsData] = useState<{ [key: string]: number[] }>({});
-  // State da Visão (Abas)
   const [view, setView] = useState<ViewMode>('all');
+
+  // States para o TEMPO DE PASSADA
+  const [gaitState, setGaitState] = useState<'SWING' | 'STANCE'>('SWING'); // Começa 'no ar'
+  const [stepStartTime, setStepStartTime] = useState<number | null>(null);
+  const [lastStepDuration, setLastStepDuration] = useState<number | null>(null); // Em segundos
 
   // --- EFEITOS (HOOKS) ---
 
-  // EFEITO 1: Buscar dados e ATUALIZAR OS DOIS STATES
+  // EFEITO 1: Buscar dados
   useEffect(() => {
     const id = setInterval(async () => {
       try {
@@ -123,17 +128,13 @@ export default function App() {
         
         if (data.pressao) {
           const newData: Pressao = data.pressao;
-
           // 1. Atualiza o state 'pressao' (para o Pé e Gauge)
           setPressao(newData);
 
           // 2. Atualiza o state 'graphsData' (para os Gráficos de Linha)
-          // AGORA FILTRANDO SÓ PELOS 7 SENSORES
           setGraphsData((prevGraphsData) => {
             const updatedGraphs = { ...prevGraphsData };
-
             SENSOR_KEYS.forEach((key) => {
-              // Só atualiza se o sensor existir nos dados da API
               if (newData[key] !== undefined) { 
                 const newHistory = prevGraphsData[key] ? [...prevGraphsData[key]] : [];
                 newHistory.push(voltsToKpa(newData[key]));
@@ -141,7 +142,6 @@ export default function App() {
                 updatedGraphs[key] = newHistory;
               }
             });
-
             return updatedGraphs;
           });
         }
@@ -152,16 +152,17 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // EFEITO 2: Calcular Métricas (quando 'pressao' muda)
+  // EFEITO 2: Calcular Métricas + LÓGICA DO TEMPO DE PASSADA
   useEffect(() => {
     if (!pressao) return;
-    // Usa SENSOR_KEYS para garantir que só estamos olhando os 7
+
     const entriesLeft = SENSOR_KEYS
       .filter(k => k in pressao)
       .map(k => [k, pressao[k]] as [string, number]);
 
     if (entriesLeft.length === 0) return;
 
+    // --- Cálculo da Pressão Máxima ---
     const [maxSensor, maxVolts] = entriesLeft.reduce(
       (p, c) => (c[1] > p[1] ? c : p),
       entriesLeft[0]
@@ -169,28 +170,49 @@ export default function App() {
     const maxKpa = voltsToKpa(maxVolts);
     setMaxInfo({ sensor: maxSensor, valorKpa: maxKpa });
 
+    // --- Cálculo do Gauge (EMA) ---
     if (ema.current == null) ema.current = maxKpa;
     else ema.current = alpha * maxKpa + (1 - alpha) * (ema.current as number);
-  }, [pressao]);
+
+    // --- LÓGICA DO TEMPO DE PASSADA (STANCE TIME) ---
+    const isTouching = maxKpa > STANCE_THRESHOLD_KPA;
+
+    // Caso 1: Pé acabou de tocar o chão (SWING -> STANCE)
+    if (isTouching && gaitState === 'SWING') {
+      setGaitState('STANCE');
+      setStepStartTime(Date.now());
+      setLastStepDuration(null); // Limpa a duração antiga
+    }
+
+    // Caso 2: Pé acabou de sair do chão (STANCE -> SWING)
+    if (!isTouching && gaitState === 'STANCE') {
+      setGaitState('SWING');
+      if (stepStartTime) {
+        const durationMs = Date.now() - stepStartTime;
+        setLastStepDuration(durationMs / 1000); // Salva em segundos
+      }
+      setStepStartTime(null);
+    }
+
+  }, [pressao, gaitState, stepStartTime]); // Adiciona os novos states como dependência
 
   // --- PREPARAÇÃO DE DADOS PARA RENDER ---
 
-  // Dados para o PÉ (Heatmap) - Agora com 7 sensores
+  // Dados para o PÉ (Heatmap)
   const leftVals = SENSOR_KEYS.map(k => {
     const v = pressao?.[k] ?? 0;
     return Math.min(1, Math.max(0, v / 5));
   });
   const kpaVals = SENSOR_KEYS.map(k => voltsToKpa(pressao?.[k] ?? 0));
   
-  // ⚠️ ATENÇÃO AQUI: Ajuste as coordenadas do FSR6
   const footCoords = [
-    { top: 130, left: 160 },   // FSR0 (dedo maior)
+    { top: 130, left: 160 },   // FSR0
     { top: 140, left: 230 },   // FSR1
     { top: 210, left: 175 },   // FSR2
     { top: 225, left: 240 },   // FSR3
     { top: 285, left: 200 },   // FSR4
-    { top: 350, left: 180 },   // FSR5 (calcanhar)
-    { top: 350, left: 250 },   // FSR6 (CHUTEI ESSE VALOR - AJUSTE AQUI)
+    { top: 350, left: 180 },   // FSR5
+    { top: 350, left: 250 },   // FSR6 (Ajuste aqui se precisar)
   ];
 
   // Dados para os GRÁFICOS DE LINHA
@@ -243,6 +265,18 @@ export default function App() {
       </button>
     )
   }
+  
+  // Card de métrica genérico
+  const MetricCard = ({ title, children }: { title: string, children: React.ReactNode }) => (
+    <div style={{
+      background: "#fff", borderRadius: 16, padding: 16,
+      boxShadow: "0 8px 24px rgba(0,0,0,0.06)", minWidth: 260
+    }}>
+      <div style={{ fontWeight: 700, marginBottom: 8, color: "#1f2937" }}>{title}</div>
+      {children}
+    </div>
+  );
+
 
   // --- RENDERIZAÇÃO ---
   return (
@@ -277,11 +311,11 @@ export default function App() {
         width: '100%' 
       }}>
         
-        {/* === Bloco 1: O Pé (Heatmap) + Gauge === */}
-        {/* Só mostra se a view for 'all' ou 'foot' */}
+        {/* === Bloco 1: O Pé (Heatmap) + Gauge + Métricas === */}
         {(view === 'all' || view === 'foot') && (
           <>
             <div style={{ textAlign: "center", position: "relative" }}>
+              {/* ... (código do pé, sem mudanças) ... */}
               <div
                 style={{
                   position: "relative",
@@ -295,11 +329,8 @@ export default function App() {
                   transform: "translateY(20px)",
                 }}
               >
-                {/* Agora mapeia SENSOR_KEYS, garantindo 7 sensores */}
                 {SENSOR_KEYS.map((key, i) => {
-                  // Checa se as coordenadas existem (evita crash se footCoords for menor)
                   if (!footCoords[i]) return null; 
-                  
                   return (
                     <div
                       key={key}
@@ -321,19 +352,12 @@ export default function App() {
                         opacity: 0.9,
                       }}
                     >
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: 3,
-                          left: 3,
-                          background: "rgba(0,0,0,0.6)",
-                          color: "white",
-                          padding: "1px 4px",
-                          borderRadius: 4,
-                          fontSize: 10,
-                          fontWeight: 700,
-                        }}
-                      >
+                      <div style={{
+                          position: "absolute", top: 3, left: 3,
+                          background: "rgba(0,0,0,0.6)", color: "white",
+                          padding: "1px 4px", borderRadius: 4,
+                          fontSize: 10, fontWeight: 700,
+                        }}>
                         {key.toUpperCase()}
                       </div>
                       {kpaVals[i].toFixed(1)} kPa
@@ -344,7 +368,7 @@ export default function App() {
               <div style={{ color: "#a855f7", fontWeight: 700 }}>PÉ DIREITO</div>
             </div>
 
-            {/* Gauge + Métricas */}
+            {/* Coluna de Métricas (Gauge + Cards) */}
             <div style={{ display: "grid", gap: 16, paddingTop: 20 }}>
               <Gauge
                 value={(ema.current ?? 0)}
@@ -352,11 +376,8 @@ export default function App() {
                 label="Pressão Máxima (suavizada)"
                 sublabel={maxInfo ? maxInfo.sensor.toUpperCase() : ""}
               />
-              <div style={{
-                background: "#fff", borderRadius: 16, padding: 16,
-                boxShadow: "0 8px 24px rgba(0,0,0,0.06)", minWidth: 260
-              }}>
-                <div style={{ fontWeight: 700, marginBottom: 8, color: "#1f2937" }}>Métricas</div>
+              
+              <MetricCard title="Métricas de Pressão">
                 <div style={{ fontSize: 14, color: "#374151" }}>
                   <strong>Máxima instantânea:</strong>{" "}
                   {maxInfo ? `${maxInfo.valorKpa.toFixed(1)} kPa (${maxInfo.sensor.toUpperCase()})` : "—"}
@@ -364,14 +385,32 @@ export default function App() {
                     (sensores {SENSOR_KEYS.map(k => k.toUpperCase()).join('–')})
                   </div>
                 </div>
-              </div>
+              </MetricCard>
+
+              {/* === NOVO CARD DE TEMPO DE PASSADA === */}
+              <MetricCard title="Métricas da Passada">
+                <div style={{ fontSize: 14, color: "#374151" }}>
+                  <strong>Tempo de apoio (última):</strong>{" "}
+                  <span style={{fontWeight: 600, fontSize: 16, color: '#111827'}}>
+                    {lastStepDuration ? `${lastStepDuration.toFixed(2)} s` : "Calculando..."}
+                  </span>
+                </div>
+                 <div style={{ fontSize: 14, color: "#374151", marginTop: 8 }}>
+                  <strong>Status atual:</strong>{" "}
+                  <span style={{
+                      fontWeight: 700, 
+                      color: gaitState === 'STANCE' ? '#16a34a' : '#6b7280' 
+                    }}>
+                    {gaitState === 'STANCE' ? 'PÉ NO CHÃO' : 'NO AR'}
+                  </span>
+                </div>
+              </MetricCard>
+
             </div>
           </>
         )}
 
         {/* === Bloco 2: Gráficos de Linha === */}
-        {/* Só mostra se a view for 'all' ou 'graphs' */}
-        {/* Agora mapeia SENSOR_KEYS, garantindo só 7 gráficos */}
         {(view === 'all' || view === 'graphs') && SENSOR_KEYS.map((sensorKey) => (
           <div 
             key={sensorKey} 
