@@ -38,6 +38,10 @@ pip install -r requirements.txt
 set DATABASE_URL=postgresql://postgres:1809@localhost:5432/gaitvision (PowerShell: `$env:DATABASE_URL = "postgresql://postgres:1809@localhost:5432/gaitvision"`)
 alembic upgrade head
 set ARDUINO_PORT=<porta_do_arduino> (PowerShell: `$env:ARDUINO_PORT = "COM5"`)
+# Para usar o ESP32 pareado via Bluetooth SPP (RFCOMM) direto no backend:
+set USE_BLUETOOTH=1
+set ESP32_BT_ADDRESS=<MAC_do_esp32>   (ex.: `98:D3:31:F7:42:10`)
+set ESP32_BT_CHANNEL=1                (ajuste conforme o firmware)
 uvicorn main:app
 
 ### 2. Frontend

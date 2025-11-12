@@ -3,12 +3,64 @@ import os
 import random
 import threading
 import time
+from typing import Protocol
 
 import serial
 
-# $env:ARDUINO_PORT = "COM5" -> exec no terminal para definir a porta
+USE_BLUETOOTH = os.getenv("USE_BLUETOOTH", "0").lower() in {"1", "true", "yes"}
 PORTA = os.getenv("ARDUINO_PORT", "COM3")
-BAUDRATE = 115200
+BAUDRATE = int(os.getenv("ARDUINO_BAUDRATE", "115200"))
+BT_ADDRESS = os.getenv("ESP32_BT_ADDRESS")
+BT_CHANNEL = int(os.getenv("ESP32_BT_CHANNEL", "1"))
+
+if USE_BLUETOOTH:
+    try:
+        import bluetooth  # type: ignore
+    except ImportError as exc:  # pragma: no cover - import guard
+        raise RuntimeError("pybluez nao instalado. Adicione 'pybluez' ao requirements e reinstale.") from exc
+
+
+class _Connection(Protocol):
+    def readline(self) -> bytes: ...
+    def close(self) -> None: ...
+
+
+class _SerialConnection:
+    def __init__(self) -> None:
+        self._serial = serial.Serial(PORTA, BAUDRATE, timeout=0.2)
+        time.sleep(2)
+        self._serial.reset_input_buffer()
+
+    def readline(self) -> bytes:
+        return self._serial.readline()
+
+    def close(self) -> None:
+        try:
+            self._serial.close()
+        except Exception:
+            pass
+
+
+class _BluetoothConnection:
+    def __init__(self) -> None:
+        if not BT_ADDRESS:
+            raise RuntimeError("ESP32_BT_ADDRESS nao configurado para conexao Bluetooth.")
+        sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+        sock.connect((BT_ADDRESS, BT_CHANNEL))
+        sock.settimeout(0.2)
+        self._socket = sock
+        self._reader = sock.makefile("rb")
+
+    def readline(self) -> bytes:
+        return self._reader.readline()
+
+    def close(self) -> None:
+        for obj in (self._reader, self._socket):
+            try:
+                obj.close()
+            except Exception:
+                pass
+
 
 _last_data = None
 _stop_flag = False
@@ -16,26 +68,29 @@ _data_lock = threading.Lock()
 _data_event = threading.Event()
 
 
-def _open_serial_blocking():
+def _open_connection_blocking() -> _Connection:
     while not _stop_flag:
         try:
-            ser = serial.Serial(PORTA, BAUDRATE, timeout=0.2)
-            time.sleep(2)
-            ser.reset_input_buffer()
-            print(f"Conectado ao Arduino na porta {PORTA}")
-            return ser
+            if USE_BLUETOOTH:
+                conn = _BluetoothConnection()
+                print(f"Conectado ao ESP32 via Bluetooth ({BT_ADDRESS}:{BT_CHANNEL})")
+            else:
+                conn = _SerialConnection()
+                print(f"Conectado ao dispositivo serial na porta {PORTA}")
+            return conn
         except Exception as e:
-            print(f"Nao foi possivel abrir a porta {PORTA}: {e}. Tentando novamente em 1 segundo...")
+            target = BT_ADDRESS if USE_BLUETOOTH else PORTA
+            print(f"Nao foi possivel conectar a {target}: {e}. Tentando novamente em 1 segundo...")
             time.sleep(1)
 
 
 def _serial_loop():
     global _last_data
     while not _stop_flag:
-        ser = _open_serial_blocking()
+        conn = _open_connection_blocking()
         while not _stop_flag:
             try:
-                line = ser.readline().decode("utf-8", errors="ignore").strip()
+                line = conn.readline().decode("utf-8", errors="ignore").strip()
                 if not line:
                     continue
                 if not (line.startswith("{") and line.endswith("}")):
@@ -48,9 +103,9 @@ def _serial_loop():
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             except Exception as e:
-                print("Erro na leitura serial:", e)
+                print("Erro na leitura do dispositivo:", e)
                 try:
-                    ser.close()
+                    conn.close()
                 except Exception:
                     pass
                 break
