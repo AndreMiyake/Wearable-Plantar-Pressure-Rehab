@@ -8,10 +8,12 @@ from typing import Protocol
 import serial
 
 USE_BLUETOOTH = os.getenv("USE_BLUETOOTH", "0").lower() in {"1", "true", "yes"}
-PORTA = os.getenv("ARDUINO_PORT", "COM3")
+PORTA = os.getenv("ARDUINO_PORT", "COM6")
 BAUDRATE = int(os.getenv("ARDUINO_BAUDRATE", "115200"))
 BT_ADDRESS = os.getenv("ESP32_BT_ADDRESS")
 BT_CHANNEL = int(os.getenv("ESP32_BT_CHANNEL", "1"))
+ALLOW_SIMULATED = os.getenv("ALLOW_SIMULATED_DATA", "0").lower() in {"1", "true", "yes"}
+SIMULATED_SENSOR_COUNT = 7
 
 if USE_BLUETOOTH:
     try:
@@ -116,15 +118,15 @@ threading.Thread(target=_serial_loop, daemon=True).start()
 
 
 def _generate_fake_data():
-    """Retorna leituras simuladas (6 FSR por pe, total 12 sensores)."""
+    """Retorna leituras simuladas para os 7 sensores."""
     fake = {}
-    for i in range(12):
+    for i in range(SIMULATED_SENSOR_COUNT):
         fake[f"fsr{i}"] = 2.5 + 2.5 * random.uniform(-0.9, 0.9)
         fake[f"fsr{i}"] = max(0, min(5, fake[f"fsr{i}"]))  # garante entre 0 e 5 V
     return fake
 
 
-def read_pressure_data(timeout=1.0, allow_simulated=True):
+def read_pressure_data(timeout=1.0, allow_simulated=ALLOW_SIMULATED):
     """
     Retorna o ultimo pacote recebido do Arduino.
     Se nada chegar dentro do timeout e allow_simulated=True, devolve dados fake.
