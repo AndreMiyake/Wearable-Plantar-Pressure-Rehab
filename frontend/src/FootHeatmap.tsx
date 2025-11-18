@@ -1,22 +1,13 @@
 import React, { useEffect, useRef } from "react";
 import "./Heatmap.css";
+import { SENSOR_COORDS, SENSOR_KEYS } from "./lib/sensors";
 
-const SENSOR_COORDS: Record<string, { x: number; y: number }> = {
-  fsr0: { x: 160, y: 130 },
-  fsr1: { x: 230, y: 140 },
-  fsr2: { x: 175, y: 210 },
-  fsr3: { x: 240, y: 225 },
-  fsr4: { x: 190, y: 280 },
-  fsr5: { x: 160, y: 350 },
-  fsr6: { x: 220, y: 340 },
-};
-const SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"];
+const CANVAS_WIDTH = 420;
+const CANVAS_HEIGHT = 450;
 const voltsToKpa = (v: number) => 100 * Math.pow(v, 1.5);
 
 const MAX_PRESSURE_KPA = 400.0;
 const SENSOR_RADIUS = 80;
-const CANVAS_WIDTH = 420;
-const CANVAS_HEIGHT = 450;
 
 interface FootHeatmapProps {
   sensorData: Record<string, number> | null;

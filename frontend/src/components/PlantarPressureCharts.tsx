@@ -53,7 +53,7 @@ const baseOptions: ChartOptions<"line"> = {
       beginAtZero: true,
       title: {
         display: true,
-        text: "Pressao (kPa)",
+        text: "Pressao relativa (kPa)",
         color: "#cbd5f5",
       },
     },
@@ -88,15 +88,18 @@ function PlantarPressureCharts<K extends string = string>({
   );
   const secondsWindow = history.length > 1 ? Math.round(history.length * 0.5) : 0;
   const totalSeries = history.map((sample) => sample.total);
+  const normalizedTotalSeries = normalizeToBaseline(totalSeries);
   const hasSamples = history.length > 0;
 
   const regionDatasets = regionKeys.map((regionKey, index) => {
     const color = COLOR_PALETTE[index % COLOR_PALETTE.length];
+    const values = history.map((snapshot) => snapshot.regions[regionKey] ?? 0);
     return {
       key: regionKey,
       label: regionLabels[regionKey],
       color,
-      values: history.map((snapshot) => snapshot.regions[regionKey] ?? 0),
+      values,
+      normalizedValues: normalizeToBaseline(values),
     };
   });
 
@@ -105,7 +108,7 @@ function PlantarPressureCharts<K extends string = string>({
     datasets: [
       {
         label: "Pressao total",
-        data: totalSeries,
+        data: normalizedTotalSeries,
         borderColor: "#ec4899",
         backgroundColor: "#ec489933",
         tension: 0.35,
@@ -119,7 +122,7 @@ function PlantarPressureCharts<K extends string = string>({
     labels,
     datasets: regionDatasets.map((dataset) => ({
       label: dataset.label,
-      data: dataset.values,
+      data: dataset.normalizedValues,
       borderColor: dataset.color,
       backgroundColor: `${dataset.color}33`,
       tension: 0.3,
@@ -173,7 +176,7 @@ function PlantarPressureCharts<K extends string = string>({
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
-            {regionDatasets.map(({ key, label, color, values }) => (
+            {regionDatasets.map(({ key, label, color, normalizedValues }) => (
               <div key={key as string} className="bg-white/5 rounded-2xl border border-white/10 p-4 space-y-3">
                 <div className="flex items-center justify-between text-sm text-slate-300">
                   <span>{label}</span>
@@ -188,7 +191,7 @@ function PlantarPressureCharts<K extends string = string>({
                       datasets: [
                         {
                           label,
-                          data: values,
+                          data: normalizedValues,
                           borderColor: color,
                           backgroundColor: `${color}33`,
                           tension: 0.25,
@@ -210,3 +213,14 @@ function PlantarPressureCharts<K extends string = string>({
 }
 
 export default PlantarPressureCharts;
+
+function normalizeToBaseline(values: number[]): number[] {
+  if (!values.length) {
+    return values;
+  }
+  const baseline = Math.min(...values);
+  if (!Number.isFinite(baseline) || baseline === 0) {
+    return values.slice();
+  }
+  return values.map((value) => Math.max(value - baseline, 0));
+}

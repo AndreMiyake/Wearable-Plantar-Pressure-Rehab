@@ -10,24 +10,15 @@ import {
   fetchPressure,
   fetchSession,
 } from "../lib/api";
-
-const SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"];
-const SENSOR_COORDS: Record<string, { x: number; y: number }> = {
-  fsr0: { x: 160, y: 130 },
-  fsr1: { x: 230, y: 140 },
-  fsr2: { x: 175, y: 210 },
-  fsr3: { x: 240, y: 225 },
-  fsr4: { x: 200, y: 285 },
-  fsr5: { x: 180, y: 350 },
-  fsr6: { x: 250, y: 350 },
-};
+import { SENSOR_COORDS, SENSOR_KEYS, type SensorKey } from "../lib/sensors";
 
 const COP_THRESHOLD = 5;
 type RegionKey = "antepe" | "mediape" | "calcanhar";
-const REGION_SENSORS: Record<RegionKey, string[]> = {
-  antepe: ["fsr0", "fsr1"],
-  mediape: ["fsr2", "fsr3"],
-  calcanhar: ["fsr4", "fsr5", "fsr6"],
+const sensorsByDepth = [...SENSOR_KEYS].sort((a, b) => SENSOR_COORDS[a].y - SENSOR_COORDS[b].y);
+const REGION_SENSORS: Record<RegionKey, SensorKey[]> = {
+  antepe: sensorsByDepth.slice(0, 2),
+  mediape: sensorsByDepth.slice(2, 5),
+  calcanhar: sensorsByDepth.slice(5),
 };
 const REGION_LABELS: Record<RegionKey, string> = {
   antepe: "Antepe",
