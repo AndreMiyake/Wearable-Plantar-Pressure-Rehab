@@ -14,12 +14,7 @@ import { SENSOR_COORDS, SENSOR_KEYS, type SensorKey } from "../lib/sensors";
 
 const COP_THRESHOLD = 5;
 type RegionKey = "antepe" | "mediape" | "calcanhar";
-const sensorsByDepth = [...SENSOR_KEYS].sort((a, b) => SENSOR_COORDS[a].y - SENSOR_COORDS[b].y);
-const REGION_SENSORS: Record<RegionKey, SensorKey[]> = {
-  antepe: sensorsByDepth.slice(0, 2),
-  mediape: sensorsByDepth.slice(2, 5),
-  calcanhar: sensorsByDepth.slice(5),
-};
+const REGION_SENSORS: Record<RegionKey, SensorKey[]> = computeRegionSensors();
 const REGION_LABELS: Record<RegionKey, string> = {
   antepe: "Antepe",
   mediape: "Medio pe",
@@ -331,4 +326,53 @@ function calculateRegionAverages(pressao: Pressao): Record<RegionKey, number> {
   }
 
   return result;
+}
+
+function computeRegionSensors(): Record<RegionKey, SensorKey[]> {
+  const sensorsWithCoords = SENSOR_KEYS.map((key) => ({
+    key,
+    coord: SENSOR_COORDS[key] ?? { x: 0, y: 0 },
+  }));
+  sensorsWithCoords.sort((a, b) => a.coord.y - b.coord.y);
+
+  const yValues = sensorsWithCoords.map((item) => item.coord.y);
+  const minY = Math.min(...yValues);
+  const maxY = Math.max(...yValues);
+  const range = Math.max(maxY - minY, 1);
+  const antepeLimit = minY + range * 0.35;
+  const calcanharLimit = minY + range * 0.7;
+
+  const regionSensors: Record<RegionKey, SensorKey[]> = {
+    antepe: [],
+    mediape: [],
+    calcanhar: [],
+  };
+
+  for (const { key, coord } of sensorsWithCoords) {
+    if (coord.y <= antepeLimit) {
+      regionSensors.antepe.push(key);
+    } else if (coord.y >= calcanharLimit) {
+      regionSensors.calcanhar.push(key);
+    } else {
+      regionSensors.mediape.push(key);
+    }
+  }
+
+  const ensureRegionHasSensors = (region: RegionKey, fallbackRegion: RegionKey) => {
+    if (regionSensors[region].length === 0 && regionSensors[fallbackRegion].length > 1) {
+      const key = regionSensors[fallbackRegion].shift()!;
+      regionSensors[region].push(key);
+    }
+  };
+
+  ensureRegionHasSensors("antepe", "mediape");
+  ensureRegionHasSensors("calcanhar", "mediape");
+  if (!regionSensors.mediape.length) {
+    const donor =
+      regionSensors.antepe.length > regionSensors.calcanhar.length ? "antepe" : "calcanhar";
+    const key = regionSensors[donor].pop()!;
+    regionSensors.mediape.push(key);
+  }
+
+  return regionSensors;
 }
