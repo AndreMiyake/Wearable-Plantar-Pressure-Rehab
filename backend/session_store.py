@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session, object_session
 from db import SessionLocal
 from models import Patient, Physiotherapist, PressureSample, Session as DbSession
 
-SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"]
+# Apenas os sensores ativos (fsr1 a fsr4) sao considerados no banco e nos calculos de regioes
+SENSOR_KEYS = ["fsr1", "fsr2", "fsr3", "fsr4"]
 REGIONS: Dict[str, List[str]] = {
-    "HEEL": ["fsr5", "fsr6"],
-    "MIDFOOT": ["fsr2", "fsr3", "fsr4"],
-    "TOE": ["fsr0", "fsr1"],
+    "HEEL": ["fsr2"],  # calcanhar
+    "MIDFOOT": ["fsr4"],  # medio pe (lateral)
+    "TOE": ["fsr1", "fsr3"],  # dedao e cabeca distal do primeiro metatarso
 }
 DEFAULT_PHYSIO_EMAIL = "fisioterapeuta@pbl2025.com"
 DEFAULT_PHYSIO_NAME = "Fisioterapeuta PBL"

@@ -33,7 +33,7 @@ _extra_disabled = {
 }
 DISABLED_SENSORS = DEFAULT_DISABLED_SENSORS | _extra_disabled
 # Vazio significa permitir todos os sensores; configure ALLOWED_SENSORS no ambiente se quiser limitar
-DEFAULT_ALLOWED_SENSORS: set[str] = set()
+DEFAULT_ALLOWED_SENSORS: set[str] = {"fsr1", "fsr2", "fsr3", "fsr4"}
 _allowed_from_env = {
     sensor.strip()
     for sensor in os.getenv("ALLOWED_SENSORS", "").split(",")
@@ -42,7 +42,8 @@ _allowed_from_env = {
 ALLOWED_SENSORS = _allowed_from_env or DEFAULT_ALLOWED_SENSORS
 BASELINE_LEARN_RATE = float(os.getenv("SENSOR_BASELINE_ALPHA", "0.02"))
 CONTACT_MIN_VOLTAGE = float(os.getenv("CONTACT_MIN_VOLTAGE", "0.35"))
-MIN_ACTIVE_SENSORS = int(os.getenv("MIN_ACTIVE_SENSORS", "2"))
+# Consideramos o pé ativo se ao menos 1 sensor passar do limiar.
+MIN_ACTIVE_SENSORS = int(os.getenv("MIN_ACTIVE_SENSORS", "1"))
 NOISE_THRESHOLD_VOLTAGE = float(os.getenv("NOISE_THRESHOLD_VOLTAGE", "0.15"))
 NOISE_TRIGGER_COUNT = int(os.getenv("NOISE_TRIGGER_COUNT", "80"))
 BASELINE_OFFSET_TOLERANCE = float(os.getenv("BASELINE_OFFSET_TOLERANCE", "0.02"))

@@ -12,15 +12,21 @@ import {
 } from "../lib/api";
 import { SENSOR_COORDS, SENSOR_KEYS, type SensorKey } from "../lib/sensors";
 
-const COP_THRESHOLD = 5;
+const COP_THRESHOLD = 1;
 type RegionKey = "antepe" | "mediape" | "calcanhar";
-const REGION_SENSORS: Record<RegionKey, SensorKey[]> = computeRegionSensors();
+const REGION_SENSORS: Record<RegionKey, SensorKey[]> = {
+  antepe: ["fsr1", "fsr3"], // dedao + cabeca distal do primeiro metatarso
+  mediape: ["fsr4"], // medio pe (lateral)
+  calcanhar: ["fsr2"], // calcanhar
+};
 const REGION_LABELS: Record<RegionKey, string> = {
   antepe: "Antepe",
   mediape: "Medio pe",
   calcanhar: "Calcanhar",
 };
 const MAX_HISTORY_POINTS = 120;
+const MAX_COP_HISTORY = 200;
+const SENSOR_BOUNDS = computeSensorBounds(SENSOR_COORDS);
 
 type PressureSnapshot = {
   timestamp: number;
@@ -39,6 +45,7 @@ const SessionPage: React.FC = () => {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [pressao, setPressao] = useState<Pressao | null>(null);
   const [cop, setCop] = useState<{ x: number; y: number } | null>(null);
+  const [copHistory, setCopHistory] = useState<Array<{ x: number; y: number }>>([]);
   const [maxKpa, setMaxKpa] = useState(0);
   const [regionBreakdown, setRegionBreakdown] = useState<Record<RegionKey, number>>({
     antepe: 0,
@@ -86,7 +93,7 @@ const SessionPage: React.FC = () => {
       } finally {
         savingRef.current = false;
       }
-    }, 500);
+    }, 200);
 
     return () => clearInterval(timer);
   }, [sessionId, session?.end_time]);
@@ -113,9 +120,20 @@ const SessionPage: React.FC = () => {
     const summaryMax = session?.max_pressure_kpa ?? 0;
     setMaxKpa(Math.max(summaryMax, highest));
     if (copWeight > 0) {
-      setCop({ x: weightedX / copWeight, y: weightedY / copWeight });
+      const x = weightedX / copWeight;
+      const y = weightedY / copWeight;
+      const clamped = {
+        x: clamp(x, SENSOR_BOUNDS.minX, SENSOR_BOUNDS.maxX),
+        y: clamp(y, SENSOR_BOUNDS.minY, SENSOR_BOUNDS.maxY),
+      };
+      setCop(clamped);
+      setCopHistory((prev) => {
+        const next = [...prev, clamped];
+        return next.length > MAX_COP_HISTORY ? next.slice(next.length - MAX_COP_HISTORY) : next;
+      });
     } else {
       setCop(null);
+      setCopHistory([]);
     }
     const snapshot = snapshotFromPressures(pressao, Date.now());
     setRegionBreakdown(snapshot.regions);
@@ -220,7 +238,7 @@ const SessionPage: React.FC = () => {
         <section className="grid lg:grid-cols-2 gap-8 items-start">
           <div className="bg-white/5 rounded-3xl border border-white/10 p-6 space-y-4">
             <span className="text-xs uppercase tracking-widest text-slate-400">Heatmap plantar</span>
-            <FootHeatmap sensorData={pressao} cop={cop} />
+            <FootHeatmap sensorData={pressao} cop={cop} copHistory={copHistory} />
             <p className="text-sm text-slate-400 text-center">Atualizando a cada 0,5s</p>
           </div>
 
@@ -328,51 +346,22 @@ function calculateRegionAverages(pressao: Pressao): Record<RegionKey, number> {
   return result;
 }
 
-function computeRegionSensors(): Record<RegionKey, SensorKey[]> {
-  const sensorsWithCoords = SENSOR_KEYS.map((key) => ({
-    key,
-    coord: SENSOR_COORDS[key] ?? { x: 0, y: 0 },
-  }));
-  sensorsWithCoords.sort((a, b) => a.coord.y - b.coord.y);
+type Bounds = { minX: number; maxX: number; minY: number; maxY: number };
 
-  const yValues = sensorsWithCoords.map((item) => item.coord.y);
-  const minY = Math.min(...yValues);
-  const maxY = Math.max(...yValues);
-  const range = Math.max(maxY - minY, 1);
-  const antepeLimit = minY + range * 0.35;
-  const calcanharLimit = minY + range * 0.7;
-
-  const regionSensors: Record<RegionKey, SensorKey[]> = {
-    antepe: [],
-    mediape: [],
-    calcanhar: [],
-  };
-
-  for (const { key, coord } of sensorsWithCoords) {
-    if (coord.y <= antepeLimit) {
-      regionSensors.antepe.push(key);
-    } else if (coord.y >= calcanharLimit) {
-      regionSensors.calcanhar.push(key);
-    } else {
-      regionSensors.mediape.push(key);
-    }
+function computeSensorBounds(coords: Record<string, { x: number; y: number }>): Bounds {
+  const values = Object.values(coords);
+  if (!values.length) {
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
   }
-
-  const ensureRegionHasSensors = (region: RegionKey, fallbackRegion: RegionKey) => {
-    if (regionSensors[region].length === 0 && regionSensors[fallbackRegion].length > 1) {
-      const key = regionSensors[fallbackRegion].shift()!;
-      regionSensors[region].push(key);
-    }
+  return {
+    minX: Math.min(...values.map((coord) => coord.x)),
+    maxX: Math.max(...values.map((coord) => coord.x)),
+    minY: Math.min(...values.map((coord) => coord.y)),
+    maxY: Math.max(...values.map((coord) => coord.y)),
   };
+}
 
-  ensureRegionHasSensors("antepe", "mediape");
-  ensureRegionHasSensors("calcanhar", "mediape");
-  if (!regionSensors.mediape.length) {
-    const donor =
-      regionSensors.antepe.length > regionSensors.calcanhar.length ? "antepe" : "calcanhar";
-    const key = regionSensors[donor].pop()!;
-    regionSensors.mediape.push(key);
-  }
-
-  return regionSensors;
+function clamp(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) return min;
+  return Math.min(Math.max(value, min), max);
 }

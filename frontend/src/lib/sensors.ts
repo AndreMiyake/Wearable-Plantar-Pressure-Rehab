@@ -1,4 +1,4 @@
-export const SENSOR_KEYS = ["fsr0", "fsr1", "fsr2", "fsr3", "fsr4", "fsr5", "fsr6"] as const;
+export const SENSOR_KEYS = ["fsr1", "fsr2", "fsr3", "fsr4"] as const;
 
 export type SensorKey = (typeof SENSOR_KEYS)[number];
 
@@ -6,23 +6,17 @@ export type SensorCoord = { x: number; y: number };
 export type SensorCoordMap = Record<SensorKey, SensorCoord>;
 
 export const RAW_SENSOR_COORDS: SensorCoordMap = {
-  fsr0: { x: 210, y: 50 },
-  fsr1: { x: 300, y: 400 },
-  fsr2: { x: 130, y: 100 },
-  fsr3: { x: 350, y: 175 },
-  fsr4: { x: 400, y: 400 },
-  fsr5: { x: 50, y: 210 },
-  fsr6: { x: 50, y: 300 },
+  fsr1: { x: 20, y: 10 }, // dedao do pe (mais para a esquerda)
+  fsr2: { x: 50, y: 90 }, // calcanhar
+  fsr3: { x: 35, y: 30 }, // cabeca distal do primeiro metatarso (um pouco para a esquerda)
+  fsr4: { x: 70, y: 55 }, // medio pe (lateral)
 };
 
 export const IMAGE_SENSOR_COORDS: SensorCoordMap = {
-  fsr0: { x: 160, y: 130 },
-  fsr1: { x: 230, y: 140 },
-  fsr2: { x: 175, y: 210 },
-  fsr3: { x: 240, y: 225 },
-  fsr4: { x: 190, y: 280 },
-  fsr5: { x: 160, y: 350 },
-  fsr6: { x: 220, y: 340 },
+  fsr1: { x: 170, y: 95 },
+  fsr2: { x: 215, y: 365 },
+  fsr3: { x: 185, y: 165 },
+  fsr4: { x: 255, y: 245 },
 };
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number };

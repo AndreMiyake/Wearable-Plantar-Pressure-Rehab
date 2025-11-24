@@ -6,12 +6,13 @@ const CANVAS_WIDTH = 420;
 const CANVAS_HEIGHT = 450;
 const voltsToKpa = (v: number) => 100 * Math.pow(v, 1.5);
 
-const MAX_PRESSURE_KPA = 400.0;
+const MAX_PRESSURE_KPA = 150.0;
 const SENSOR_RADIUS = 80;
 
 interface FootHeatmapProps {
   sensorData: Record<string, number> | null;
   cop: { x: number; y: number } | null;
+  copHistory?: Array<{ x: number; y: number }>;
 }
 
 const GRADIENT_STOPS = [
@@ -21,7 +22,7 @@ const GRADIENT_STOPS = [
   { stop: 1.0, color: [239, 68, 68] },
 ];
 
-const FootHeatmap: React.FC<FootHeatmapProps> = ({ sensorData, cop }) => {
+const FootHeatmap: React.FC<FootHeatmapProps> = ({ sensorData, cop, copHistory = [] }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -58,8 +59,26 @@ const FootHeatmap: React.FC<FootHeatmapProps> = ({ sensorData, cop }) => {
       ctx.fill();
     }
 
+    // Desenha linha de trajetória do CoP
+    if (copHistory.length > 1) {
+      ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = "rgba(59, 130, 246, 0.85)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      const [first, ...rest] = copHistory;
+      ctx.moveTo(first.x, first.y);
+      for (const point of rest) {
+        ctx.lineTo(point.x, point.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+    }
+
     ctx.restore();
-  }, [sensorData]);
+  }, [sensorData, cop, copHistory]);
 
   return (
     <div className="heatmap-wrapper">
