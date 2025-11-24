@@ -1,5 +1,7 @@
+import asyncio
 import json
 import os
+import queue
 import random
 import statistics
 import threading
@@ -18,6 +20,8 @@ PORTA_LIST = [
 BAUDRATE = int(os.getenv("ARDUINO_BAUDRATE", "115200"))
 BT_ADDRESS = os.getenv("ESP32_BT_ADDRESS")
 BT_CHANNEL = int(os.getenv("ESP32_BT_CHANNEL", "1"))
+BT_CHARACTERISTIC = os.getenv("ESP32_BT_CHARACTERISTIC")
+BT_TIMEOUT = float(os.getenv("ESP32_BT_TIMEOUT", "10"))
 ALLOW_SIMULATED = os.getenv("ALLOW_SIMULATED_DATA", "0").lower() in {"1", "true", "yes"}
 INITIAL_SENSOR_COUNT = int(os.getenv("SENSOR_COUNT", "7"))
 SENSOR_KEYS = [f"fsr{i}" for i in range(INITIAL_SENSOR_COUNT)]
@@ -47,9 +51,9 @@ OUTLIER_MIN_THRESHOLD = float(os.getenv("SENSOR_OUTLIER_MIN_VOLTAGE", "0.4"))
 
 if USE_BLUETOOTH:
     try:
-        import bluetooth  # type: ignore
+        from bleak import BleakClient
     except ImportError as exc:  # pragma: no cover - import guard
-        raise RuntimeError("pybluez2 nao instalado. Adicione 'pybluez2' ao requirements e reinstale.") from exc
+        raise RuntimeError("bleak nao instalado. Adicione 'bleak' ao requirements e reinstale.") from exc
 
 
 class _Connection(Protocol):
@@ -90,21 +94,64 @@ class _BluetoothConnection:
     def __init__(self) -> None:
         if not BT_ADDRESS:
             raise RuntimeError("ESP32_BT_ADDRESS nao configurado para conexao Bluetooth.")
-        sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-        sock.connect((BT_ADDRESS, BT_CHANNEL))
-        sock.settimeout(0.2)
-        self._socket = sock
-        self._reader = sock.makefile("rb")
+        if not BT_CHARACTERISTIC:
+            raise RuntimeError("ESP32_BT_CHARACTERISTIC nao configurado para leitura via BLE.")
 
-    def readline(self) -> bytes:
-        return self._reader.readline()
+        self._queue: queue.Queue[bytes] = queue.Queue()
+        self._buffer = bytearray()
+        self._loop = asyncio.new_event_loop()
+        self._client: BleakClient | None = None
 
-    def close(self) -> None:
-        for obj in (self._reader, self._socket):
+        self._loop_thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._loop_thread.start()
+
+        # Conecta de forma bloqueante para manter API semelhante ao serial
+        fut = asyncio.run_coroutine_threadsafe(self._connect(), self._loop)
+        fut.result(timeout=BT_TIMEOUT + 2)
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _handle_notification(self, _: int, data: bytes) -> None:
+        # Junta bytes recebidos e quebra por linha
+        self._buffer.extend(data)
+        while b"\n" in self._buffer:
+            line, _, remainder = self._buffer.partition(b"\n")
+            self._buffer = bytearray(remainder)
+            self._queue.put(line + b"\n")
+
+    async def _connect(self) -> None:
+        self._client = BleakClient(BT_ADDRESS, timeout=BT_TIMEOUT)
+        await self._client.connect()
+        await self._client.start_notify(BT_CHARACTERISTIC, self._handle_notification)
+
+    async def _disconnect(self) -> None:
+        if self._client:
             try:
-                obj.close()
+                await self._client.stop_notify(BT_CHARACTERISTIC)
             except Exception:
                 pass
+            try:
+                await self._client.disconnect()
+            except Exception:
+                pass
+
+    def readline(self) -> bytes:
+        try:
+            return self._queue.get(timeout=1.0)
+        except queue.Empty:
+            return b""
+
+    def close(self) -> None:
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._disconnect(), self._loop)
+            fut.result(timeout=BT_TIMEOUT)
+        except Exception:
+            pass
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=1)
 
 
 _last_data = None
@@ -135,7 +182,7 @@ def _open_connection_blocking() -> _Connection:
         try:
             if USE_BLUETOOTH:
                 conn = _BluetoothConnection()
-                print(f"Conectado ao ESP32 via Bluetooth ({BT_ADDRESS}:{BT_CHANNEL})")
+                print(f"Conectado ao ESP32 via Bluetooth BLE ({BT_ADDRESS} / char {BT_CHARACTERISTIC})")
             else:
                 conn = _SerialConnection()
                 print(f"Conectado ao dispositivo serial na porta {PORTA}")
