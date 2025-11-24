@@ -32,7 +32,8 @@ _extra_disabled = {
     if sensor.strip()
 }
 DISABLED_SENSORS = DEFAULT_DISABLED_SENSORS | _extra_disabled
-DEFAULT_ALLOWED_SENSORS = {"fsr1", "fsr2"}
+# Vazio significa permitir todos os sensores; configure ALLOWED_SENSORS no ambiente se quiser limitar
+DEFAULT_ALLOWED_SENSORS: set[str] = set()
 _allowed_from_env = {
     sensor.strip()
     for sensor in os.getenv("ALLOWED_SENSORS", "").split(",")
