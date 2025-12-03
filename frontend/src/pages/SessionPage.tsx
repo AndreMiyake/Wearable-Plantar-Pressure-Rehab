@@ -93,7 +93,7 @@ const SessionPage: React.FC = () => {
       } finally {
         savingRef.current = false;
       }
-    }, 200);
+    }, 150);
 
     return () => clearInterval(timer);
   }, [sessionId, session?.end_time]);
@@ -239,7 +239,7 @@ const SessionPage: React.FC = () => {
           <div className="bg-white/5 rounded-3xl border border-white/10 p-6 space-y-4">
             <span className="text-xs uppercase tracking-widest text-slate-400">Heatmap plantar</span>
             <FootHeatmap sensorData={pressao} cop={cop} copHistory={copHistory} />
-            <p className="text-sm text-slate-400 text-center">Atualizando a cada 0,5s</p>
+            <p className="text-sm text-slate-400 text-center">Atualizando a cada 0,1s</p>
           </div>
 
           <div className="space-y-4">

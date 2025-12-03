@@ -1,6 +1,23 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.python-version
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test, cache e cobertura
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
 
 # Node
 node_modules/
@@ -9,8 +26,10 @@ node_modules/
 dist/
 build/
 
-# Ambiente e configs locais
+# Arquivos locais e ambiente
 .env
+.env.*
+.env.local
 .DS_Store
 Thumbs.db
 
@@ -18,6 +37,15 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Outros arquivos temporários
+# Logs e dados temporarios
 *.log
+*.sql
+*.sqlite
+*.sqlite3
 backend/session_data.json
+
+# Artefatos de analise
+data-analysis/output/
+data-analysis/resumo_final.csv
+*.asv
+*.m~
