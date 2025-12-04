@@ -52,7 +52,7 @@ for k = 1:numel(files)
         error('Coluna "timestamp" nao encontrada em %s', files(k).name);
     end
     t = csvData.matrix(:, tsIdx);
-    t = t(:);
+    t = t(:) - t(1); % remove offset absoluto para evitar escalas gigantes
     dtRaw = diff(t);
     Ts = median(dtRaw);
     % Normaliza timestamps vindos em ms (ex.: Arduino) para segundos reais.
@@ -64,6 +64,7 @@ for k = 1:numel(files)
     end
     Fs = 1 / Ts;
 
+    % Inclui fsr0 e reordena mapeamento para corrigir calcanhar vs ponta.
     wanted = {'fsr1','fsr2','fsr3','fsr4'};
     fsrCols = find(ismember(lower(headers), wanted));
     if isempty(fsrCols)
@@ -163,10 +164,10 @@ for k = 1:numel(files)
     fsrNames = lower(headers(fsrCols));
     sensorMax = max(filteredSignals, [], 1);
     aliveMask = sensorMax > 1e-3;
-    idxHeel = find(strcmp(fsrNames, 'fsr2'), 1);  % calcanhar
+    idxHeel = find(strcmp(fsrNames, 'fsr2'), 1);  % calcanhar (corrigido)
     idxMid = find(strcmp(fsrNames, 'fsr4'), 1);   % medio pe lateral
-    idxToe1 = find(strcmp(fsrNames, 'fsr1'), 1);  % dedao
-    idxToe2 = find(strcmp(fsrNames, 'fsr3'), 1);  % cabeca distal metatarso
+    idxToe1 = find(strcmp(fsrNames, 'fsr1'), 1);  % dedao / antepe medial
+    idxToe2 = find(strcmp(fsrNames, 'fsr3'), 1);  % antepe lateral
 
     heelTime = NaN; midTime = NaN; toeTime = NaN;
     if ~isempty(idxHeel) && aliveMask(idxHeel)
@@ -191,18 +192,14 @@ for k = 1:numel(files)
     end
 
     classificacao = "Indefinida";
-    if ~isnan(heelTime) && ~isnan(toeTime) && isnan(midTime)
+    if ~isnan(heelTime) && ~isnan(toeTime)
         if heelTime <= toeTime
             classificacao = "Normal";
         else
             classificacao = "Invertida";
         end
-    elseif ~isnan(heelTime) && ~isnan(midTime) && ~isnan(toeTime)
-        if heelTime <= midTime && midTime <= toeTime
-            classificacao = "Normal";
-        else
-            classificacao = "Invertida";
-        end
+    else
+        classificacao = "Indefinida"; % Só se faltar sensor
     end
 
     figure('Visible', 'off', 'Position', [100, 100, 1200, 800]);
